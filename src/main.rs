@@ -51,9 +51,49 @@ enum SolveState {
     Incomplete,
 }
 
+#[derive(Copy, Clone)]
+struct Possibles {
+    options: [bool; 9],
+    count: u8,
+}
+impl Possibles {
+    fn default() -> Self {
+        Self {
+            options: [true; 9],
+            count: 9,
+        }
+    }
+
+    fn get_solution(&self) -> Option<usize> {
+        if self.count != 1 {
+            return None;
+        }
+        self.options.iter().enumerate().find_map(|(i, v)| {
+            if *v {
+                return Some(i + 1);
+            }
+            None
+        })
+    }
+
+    fn set_value(&mut self, value: u8) {
+        if value == 0 {
+            return;
+        }
+        let index = value as usize - 1;
+        if self.options[index] {
+            self.options[index] = false;
+            self.count -= 1;
+        }
+    }
+}
+
 // example: 070000043040009610800634900094052000358460020000800530080070091902100005007040802,679518243543729618821634957794352186358461729216897534485276391962183475137945862
 struct Sudoku {
     pub raster: [[u8; 9]; 9],
+    pub rows_count: [u8; 9],
+    pub columns_count: [u8; 9],
+    pub possibles_raster: [[Possibles; 9]; 9],
 }
 
 #[allow(unused)]
@@ -61,12 +101,25 @@ impl Sudoku {
     pub fn from(input: &str) -> Self {
         let bytes = input.as_bytes();
         let mut raster = [[0u8; 9]; 9];
+        let mut rows_count: [u8; 9] = [0u8; 9];
+        let mut columns_count: [u8; 9] = [0u8; 9];
+        let possibles_raster: [[Possibles; 9]; 9] = [[Possibles::default(); 9]; 9];
         for row in 0..9 {
             for col in 0..9 {
-                raster[row][col] = bytes[row * 9 + col] - b'0';
+                let val = bytes[row * 9 + col] - b'0';
+                raster[row][col] = val;
+                if val > 0 {
+                    rows_count[row] += 1;
+                    columns_count[col] += 1;
+                }
             }
         }
-        Self { raster }
+        Self {
+            raster,
+            rows_count,
+            columns_count,
+            possibles_raster,
+        }
     }
 
     pub fn iter_row(&self, row: usize) -> Iter<'_, u8> {
@@ -86,49 +139,36 @@ impl Sudoku {
 
     pub fn solve_all_simples(&mut self) -> u8 {
         let mut found = 0;
-        // Iterate all rows, cross with columns & boxes
-        let mut possible_count: u8 = 9;
-        // Index equals the number
-        let mut possibles: [bool; 9] = [false; 9];
         for row in 0..9 {
             for col in 0..9 {
-                let value = self.raster[row][col];
-                if value != 0 {
+                if self.raster[row][col] != 0 {
                     continue;
                 }
-                possible_count = 9;
-                possibles = [true; 9];
 
-                self.iter_row(row).for_each(|v| {
-                    if (*v > 0 && possibles[unsafe { *v as usize - 1 }]) {
-                        possible_count -= 1;
-                        possibles[unsafe { *v as usize - 1 }] = false;
+                let determined = {
+                    let (raster, possibles) = (&self.raster, &mut self.possibles_raster);
+                    let p = &mut possibles[row][col];
+
+                    // Iter rows
+                    for &v in &raster[row] {
+                        p.set_value(v);
                     }
-                });
-                self.iter_column(col).for_each(|v| {
-                    if (*v > 0 && possibles[unsafe { *v as usize - 1 }]) {
-                        possible_count -= 1;
-                        possibles[unsafe { *v as usize - 1 }] = false;
+                    // Iter columns
+                    (0..9).for_each(|r| {
+                        p.set_value(raster[r][col]);
+                    });
+                    // Iter inner boxes
+                    let (rs, cs) = ((row / 3) * 3, (col / 3) * 3);
+                    for dr in 0..3 {
+                        for dc in 0..3 {
+                            p.set_value(raster[rs + dr][cs + dc]);
+                        }
                     }
-                });
-                self.iter_inner_box(row, col).for_each(|v| {
-                    if (*v > 0 && possibles[unsafe { *v as usize - 1 }]) {
-                        possible_count -= 1;
-                        possibles[unsafe { *v as usize - 1 }] = false;
-                    }
-                });
-                if possible_count == 1 {
-                    let determined_value = possibles
-                        .iter()
-                        .enumerate()
-                        .find_map(|(i, v)| {
-                            if (*v) {
-                                return Some(i + 1);
-                            }
-                            None
-                        })
-                        .unwrap();
-                    self.raster[row][col] = determined_value as u8;
+                    p.get_solution()
+                };
+
+                if let Some(v) = determined {
+                    self.raster[row][col] = v as u8;
                     found += 1;
                 }
             }
