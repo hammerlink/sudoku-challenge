@@ -3,47 +3,38 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::slice::Iter;
 
+use rayon::prelude::*;
+
 const BUFFER_SIZE: usize = 1024 * 1024; // 1 MB read buffer
 
 fn main() -> io::Result<()> {
     let file = File::open("sudoku.csv")?;
-    let mut reader = BufReader::with_capacity(BUFFER_SIZE, file);
+    let reader = BufReader::with_capacity(BUFFER_SIZE, file);
 
-    let mut line = String::with_capacity(256);
-    let mut count = 0u64;
-    let mut first = true;
+    let lines: Vec<String> = reader
+        .lines()
+        .map(|l| l.expect("read error"))
+        .skip_while(|l| l.starts_with("puzzle"))
+        .collect();
 
-    let mut incomplete = 0u64;
-    let mut incorrect = 0u64;
-    let mut complete = 0u64;
+    let (complete, incomplete, incorrect) = lines
+        .par_iter()
+        .fold(
+            || (0u64, 0u64, 0u64),
+            |mut acc, line| {
+                if let Some(result) = process_line(line) {
+                    match result {
+                        SolveState::Correct => acc.0 += 1,
+                        SolveState::Incomplete => acc.1 += 1,
+                        SolveState::Incorrect => acc.2 += 1,
+                    }
+                }
+                acc
+            },
+        )
+        .reduce(|| (0, 0, 0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2));
 
-    loop {
-        line.clear();
-        let bytes_read = reader.read_line(&mut line)?;
-        if bytes_read == 0 {
-            break;
-        }
-
-        let trimmed = line.trim_end_matches(['\n', '\r']);
-
-        // Skip header row
-        if first {
-            first = false;
-            if trimmed.starts_with("puzzle") {
-                continue;
-            }
-        }
-
-        if let Some(result) = process_line(trimmed) {
-            match result {
-                SolveState::Correct => complete += 1,
-                SolveState::Incorrect => incorrect += 1,
-                SolveState::Incomplete => incomplete += 1,
-            }
-        }
-        count += 1;
-    }
-
+    let count = complete + incomplete + incorrect;
     eprintln!("Processed {count} puzzles");
     let completed_percent = complete as f64 / count as f64 * 100.0f64;
     println!("Completed {complete} {completed_percent}");
