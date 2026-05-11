@@ -49,6 +49,8 @@ fn main() -> io::Result<()> {
     println!("Completed {complete} {completed_percent}");
     let incompleted_percent = incomplete as f64 / count as f64 * 100.0f64;
     println!("Incompleted {incomplete} {incompleted_percent}");
+    let incorrect_percent = incorrect as f64 / count as f64 * 100.0f64;
+    println!("Incorrect {incorrect} {incorrect_percent}");
     Ok(())
 }
 
@@ -136,7 +138,6 @@ impl Sudoku {
                         })
                         .unwrap();
                     self.raster[row][col] = determined_value as u8;
-                    // println!("Filling {row} - {col} value: {determined_value}");
                     found += 1;
                 }
             }
