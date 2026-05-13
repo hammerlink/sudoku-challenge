@@ -79,11 +79,29 @@ impl Possibles {
     }
 }
 
-// example: 070000043040009610800634900094052000358460020000800530080070091902100005007040802,679518243543729618821634957794352186358461729216897534485276391962183475137945862
+struct Solution {
+    pub raster: [[u8; 9]; 9],
+}
+impl Solution {
+    pub fn from(input: &str) -> Self {
+        let bytes = input.as_bytes();
+        let mut raster = [[0u8; 9]; 9];
+        for row in 0..9 {
+            for col in 0..9 {
+                let val = bytes[row * 9 + col] - b'0';
+                raster[row][col] = val;
+            }
+        }
+        Self { raster }
+    }
+}
+
 struct Sudoku {
     pub raster: [[u8; 9]; 9],
-    pub rows_count: [u8; 9],
-    pub columns_count: [u8; 9],
+    pub unsolved_rows: u16,
+    pub row_unknowns: [u8; 9],
+    pub unsolved_columns: u16,
+    pub column_unknowns: [u8; 9],
     pub possibles_raster: [[Possibles; 9]; 9],
 }
 
@@ -92,23 +110,47 @@ impl Sudoku {
     pub fn from(input: &str) -> Self {
         let bytes = input.as_bytes();
         let mut raster = [[0u8; 9]; 9];
-        let mut rows_count: [u8; 9] = [0u8; 9];
-        let mut columns_count: [u8; 9] = [0u8; 9];
+        let mut row_unknowns: [u8; 9] = [0u8; 9];
+        let mut column_unknowns: [u8; 9] = [0u8; 9];
         let possibles_raster: [[Possibles; 9]; 9] = [[Possibles::default(); 9]; 9];
         for row in 0..9 {
             for col in 0..9 {
                 let val = bytes[row * 9 + col] - b'0';
                 raster[row][col] = val;
-                if val > 0 {
-                    rows_count[row] += 1;
-                    columns_count[col] += 1;
+                if val == 0 {
+                    row_unknowns[row] += 1;
+                    column_unknowns[col] += 1;
                 }
             }
         }
+        let unsolved_rows: u16 =
+            row_unknowns
+                .iter()
+                .enumerate()
+                .fold(0, |mut result, (i, value)| {
+                    println!("{:09b} new value {} {}", result, *value, i);
+                    if *value > 0 {
+                        result |= 1u16 << i;
+                    }
+                    result
+                });
+        let unsolved_columns: u16 =
+            column_unknowns
+                .iter()
+                .enumerate()
+                .fold(0, |mut result, (i, value)| {
+                    println!("{:09b} new value {} {}", result, *value, i);
+                    if *value > 0 {
+                        result |= 1u16 << i;
+                    }
+                    result
+                });
         Self {
             raster,
-            rows_count,
-            columns_count,
+            unsolved_rows,
+            unsolved_columns,
+            row_unknowns,
+            column_unknowns,
             possibles_raster,
         }
     }
@@ -141,6 +183,7 @@ impl Sudoku {
                     let (raster, possibles) = (&self.raster, &mut self.possibles_raster);
                     let p = &mut possibles[row][col];
 
+                    // TODO: improve with bit operations
                     // Iter rows
                     for &v in &raster[row] {
                         p.exclude_option(v);
@@ -174,7 +217,7 @@ impl Sudoku {
         (found, missing)
     }
 
-    pub fn verify(&self, solution: &Sudoku) -> SolveState {
+    pub fn verify(&self, solution: &Solution) -> SolveState {
         for row in 0..9 {
             for column in 0..9 {
                 let value = self.raster[row][column];
@@ -217,7 +260,7 @@ impl fmt::Display for Sudoku {
 fn process_line(line: &str) -> Option<SolveState> {
     let (puzzle, solution) = line.split_once(',')?;
     let mut puzzle = Sudoku::from(puzzle);
-    let solution = Sudoku::from(solution);
+    let solution = Solution::from(solution);
 
     loop {
         let (found, missing) = puzzle.solve_all_simples();
@@ -236,7 +279,7 @@ fn process_line(line: &str) -> Option<SolveState> {
 
 #[cfg(test)]
 mod test {
-    use crate::{ALL_OPTIONS, Possibles, SolveState, process_line};
+    use crate::{ALL_OPTIONS, Possibles, SolveState, Sudoku, process_line};
 
     #[test]
     fn test_one_puzzle() {
@@ -246,6 +289,14 @@ mod test {
         let result = process_line(puzzle_example).expect("Some result");
 
         assert_eq!(result, SolveState::Correct);
+    }
+    #[test]
+    fn test_unknowns() {
+        let puzzle_example =
+            "679518243543729618800634900094052000358460020000800530080070091902100005007040802";
+        let sudoku = Sudoku::from(puzzle_example);
+        println!("{}", sudoku);
+        assert_eq!(format!("{:09b}", sudoku.unsolved_rows), "111111100");
     }
 
     #[test]
