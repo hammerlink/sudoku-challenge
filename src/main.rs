@@ -6,6 +6,7 @@ use std::slice::Iter;
 use rayon::prelude::*;
 
 const BUFFER_SIZE: usize = 1024 * 1024; // 1 MB read buffer
+const ALL_OPTIONS: u16 = 511;
 
 fn main() -> io::Result<()> {
     let file = File::open("sudoku.csv")?;
@@ -45,6 +46,7 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
+#[derive(PartialEq, Debug)]
 enum SolveState {
     Correct,
     Incorrect,
@@ -53,38 +55,27 @@ enum SolveState {
 
 #[derive(Copy, Clone)]
 struct Possibles {
-    options: [bool; 9],
-    count: u8,
+    options: u16,
 }
 impl Possibles {
     fn default() -> Self {
         Self {
-            options: [true; 9],
-            count: 9,
+            options: ALL_OPTIONS,
         }
     }
 
     fn get_solution(&self) -> Option<usize> {
-        if self.count != 1 {
+        if self.options.count_ones() != 1 {
             return None;
         }
-        self.options.iter().enumerate().find_map(|(i, v)| {
-            if *v {
-                return Some(i + 1);
-            }
-            None
-        })
+        Some(self.options.trailing_zeros() as usize + 1)
     }
 
-    fn set_value(&mut self, value: u8) {
+    fn exclude_option(&mut self, value: u8) {
         if value == 0 {
             return;
         }
-        let index = value as usize - 1;
-        if self.options[index] {
-            self.options[index] = false;
-            self.count -= 1;
-        }
+        self.options &= ALL_OPTIONS ^ (1u16 << (value - 1));
     }
 }
 
@@ -137,8 +128,9 @@ impl Sudoku {
             .flat_map(move |dr| (0..3).map(move |dc| &self.raster[row_start + dr][col_start + dc]))
     }
 
-    pub fn solve_all_simples(&mut self) -> u8 {
+    pub fn solve_all_simples(&mut self) -> (u8, u8) {
         let mut found = 0;
+        let mut missing = 0;
         for row in 0..9 {
             for col in 0..9 {
                 if self.raster[row][col] != 0 {
@@ -151,17 +143,21 @@ impl Sudoku {
 
                     // Iter rows
                     for &v in &raster[row] {
-                        p.set_value(v);
+                        p.exclude_option(v);
                     }
                     // Iter columns
-                    (0..9).for_each(|r| {
-                        p.set_value(raster[r][col]);
-                    });
+                    if p.options.count_ones() > 1 {
+                        (0..9).for_each(|r| {
+                            p.exclude_option(raster[r][col]);
+                        });
+                    }
                     // Iter inner boxes
-                    let (rs, cs) = ((row / 3) * 3, (col / 3) * 3);
-                    for dr in 0..3 {
-                        for dc in 0..3 {
-                            p.set_value(raster[rs + dr][cs + dc]);
+                    if p.options.count_ones() > 1 {
+                        let (rs, cs) = ((row / 3) * 3, (col / 3) * 3);
+                        for dr in 0..3 {
+                            for dc in 0..3 {
+                                p.exclude_option(raster[rs + dr][cs + dc]);
+                            }
                         }
                     }
                     p.get_solution()
@@ -170,10 +166,12 @@ impl Sudoku {
                 if let Some(v) = determined {
                     self.raster[row][col] = v as u8;
                     found += 1;
+                } else {
+                    missing += 1;
                 }
             }
         }
-        found
+        (found, missing)
     }
 
     pub fn verify(&self, solution: &Sudoku) -> SolveState {
@@ -221,47 +219,65 @@ fn process_line(line: &str) -> Option<SolveState> {
     let mut puzzle = Sudoku::from(puzzle);
     let solution = Sudoku::from(solution);
 
-    while puzzle.solve_all_simples() > 0 {}
+    loop {
+        let (found, missing) = puzzle.solve_all_simples();
+        if found == 0 {
+            if missing == 0 {
+                break;
+            } else {
+                // TODO:cast inner box line rays
+                // TODO: if 4 variables, where 2 only contain 2 options => eliminate others
+                break;
+            }
+        }
+    }
     Some(puzzle.verify(&solution))
 }
 
 #[cfg(test)]
 mod test {
-    use std::{
-        fs::File,
-        io::{BufRead, BufReader},
-    };
-
-    use crate::{BUFFER_SIZE, process_line};
+    use crate::{ALL_OPTIONS, Possibles, SolveState, process_line};
 
     #[test]
     fn test_one_puzzle() {
-        let file = File::open("sudoku.csv").unwrap();
-        let mut reader = BufReader::with_capacity(BUFFER_SIZE, file);
+        let puzzle_example = "070000043040009610800634900094052000358460020000800530080070091902100005007040802,\
+            679518243543729618821634957794352186358461729216897534485276391962183475137945862";
 
-        let mut line = String::with_capacity(256);
-        let mut first = true;
+        let result = process_line(puzzle_example).expect("Some result");
 
-        loop {
-            line.clear();
-            let bytes_read = reader.read_line(&mut line).unwrap();
-            if bytes_read == 0 {
-                break;
-            }
+        assert_eq!(result, SolveState::Correct);
+    }
 
-            let trimmed = line.trim_end_matches(['\n', '\r']);
+    #[test]
+    fn test_possibles() {
+        let mut possibles = Possibles {
+            options: 0b0000_1000_0000,
+        };
+        let result = possibles.get_solution().expect("A result");
+        assert_eq!(result, 8);
+        possibles = Possibles {
+            options: 0b0001_1000_0000,
+        };
+        assert_eq!(None, possibles.get_solution());
+        possibles.exclude_option(9);
+        let visualized = format!("{:09b}", possibles.options);
+        assert_eq!(visualized, "010000000");
+    }
 
-            // Skip header row
-            if first {
-                first = false;
-                if trimmed.starts_with("puzzle") {
-                    continue;
-                }
-            }
+    #[test]
+    fn test_bit_operations() {
+        let index = 3_usize;
+        let bit_mask = 1u16 << index;
+        let visualized = format!("{:08b}", bit_mask);
+        assert_eq!(visualized, "00001000");
+        let bit_mask = ALL_OPTIONS ^ bit_mask;
+        let visualized = format!("{:b}", bit_mask);
+        assert_eq!(visualized, "111110111");
+    }
 
-            println!("{trimmed}");
-            process_line(trimmed);
-            break;
-        }
+    #[test]
+    fn test_trailing_zeros() {
+        let value: u16 = 0b0000_0100;
+        println!("{} = {}", value, value.trailing_zeros());
     }
 }
