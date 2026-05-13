@@ -8,6 +8,12 @@ use rayon::prelude::*;
 const BUFFER_SIZE: usize = 1024 * 1024; // 1 MB read buffer
 const ALL_OPTIONS: u16 = 511;
 
+macro_rules! box_index {
+    ($row:expr, $col:expr) => {
+        ($row / 3) * 3 + ($col / 3)
+    };
+}
+
 fn main() -> io::Result<()> {
     let file = File::open("sudoku.csv")?;
     let reader = BufReader::with_capacity(BUFFER_SIZE, file);
@@ -81,13 +87,6 @@ impl Possibles {
         }
         Some(self.options.trailing_zeros() as usize + 1)
     }
-
-    fn exclude_option(&mut self, value: u8) {
-        if value == 0 {
-            return;
-        }
-        self.options &= ALL_OPTIONS ^ (1u16 << (value - 1));
-    }
 }
 
 struct Solution {
@@ -109,10 +108,18 @@ impl Solution {
 
 struct Sudoku {
     pub raster: [[u8; 9]; 9],
+    /// Which row indeces are not completely filled yet
+    /// 0_0000_1001 => 4th and 1st row contain missing values
     pub unsolved_rows: u16,
-    pub row_unknowns: [u8; 9],
+    /// Which columns have unknowns, similar to unsolved_rows
     pub unsolved_columns: u16,
-    pub column_unknowns: [u8; 9],
+    /// What options are still open for each row
+    /// index-0: 0_0001_0010 => first row has 2 and 5 missing
+    pub rows_options: [u16; 9],
+    /// What options are still open for each column
+    /// index-0: 0_0001_0010 => first column has 2 and 5 missing
+    pub columns_options: [u16; 9],
+    pub inner_box_options: [u16; 9],
     pub possibles_raster: [[Possibles; 9]; 9],
 }
 
@@ -121,24 +128,26 @@ impl Sudoku {
     pub fn from(input: &str) -> Self {
         let bytes = input.as_bytes();
         let mut raster = [[0u8; 9]; 9];
-        let mut row_unknowns: [u8; 9] = [0u8; 9];
-        let mut column_unknowns: [u8; 9] = [0u8; 9];
         let mut possibles_raster: [[Possibles; 9]; 9] = [[Possibles::default(); 9]; 9];
+        let mut rows_options = [ALL_OPTIONS; 9];
+        let mut columns_options = [ALL_OPTIONS; 9];
+        let mut inner_box_options = [ALL_OPTIONS; 9];
         for row in 0..9 {
             for col in 0..9 {
                 let val = bytes[row * 9 + col] - b'0';
                 raster[row][col] = val;
 
-                if val == 0 {
-                    row_unknowns[row] += 1;
-                    column_unknowns[col] += 1;
-                } else {
+                // Filled in value, remove options
+                if val > 0 {
                     possibles_raster[row][col] = Possibles::from(val);
+                    rows_options[row] &= ALL_OPTIONS ^ 1 << (val - 1);
+                    columns_options[col] &= ALL_OPTIONS ^ 1 << (val - 1);
+                    inner_box_options[box_index!(row, col)] &= ALL_OPTIONS ^ 1 << (val - 1);
                 }
             }
         }
         let unsolved_rows: u16 =
-            row_unknowns
+            rows_options
                 .iter()
                 .enumerate()
                 .fold(0, |mut result, (i, value)| {
@@ -148,7 +157,7 @@ impl Sudoku {
                     result
                 });
         let unsolved_columns: u16 =
-            column_unknowns
+            columns_options
                 .iter()
                 .enumerate()
                 .fold(0, |mut result, (i, value)| {
@@ -161,8 +170,9 @@ impl Sudoku {
             raster,
             unsolved_rows,
             unsolved_columns,
-            row_unknowns,
-            column_unknowns,
+            rows_options,
+            columns_options,
+            inner_box_options,
             possibles_raster,
         }
     }
@@ -173,12 +183,13 @@ impl Sudoku {
         }
         self.raster[row][col] = value;
         self.possibles_raster[row][col].options = 1 << (value - 1);
-        self.row_unknowns[row] -= 1;
-        if self.row_unknowns[row] == 0 {
+        self.rows_options[row] &= ALL_OPTIONS ^ 1 << (value - 1);
+        self.columns_options[col] &= ALL_OPTIONS ^ 1 << (value - 1);
+        self.inner_box_options[box_index!(row, col)] &= ALL_OPTIONS ^ 1 << (value - 1);
+        if self.rows_options[row] == 0 {
             self.unsolved_rows &= ALL_OPTIONS ^ 1 << row;
         }
-        self.column_unknowns[col] -= 1;
-        if self.column_unknowns[col] == 0 {
+        if self.columns_options[col] == 0 {
             self.unsolved_columns &= ALL_OPTIONS ^ 1 << col;
         }
     }
@@ -201,46 +212,29 @@ impl Sudoku {
     pub fn solve_all_simples(&mut self) -> (u8, u8) {
         let mut found = 0;
         let mut missing = 0;
+
+        // Performant for loop, only iterate over the 1 values in the u16
         let mut unsolved_rows: u16 = self.unsolved_rows;
         while unsolved_rows != 0 {
             let row = unsolved_rows.trailing_zeros() as usize;
             unsolved_rows &= unsolved_rows - 1; // clear the lowest set bit
+
+            // Performant for loop, only iterate over the 1 values in the u16
             let mut unsolved_columns: u16 = self.unsolved_columns;
             while unsolved_columns != 0 {
                 let col = unsolved_columns.trailing_zeros() as usize;
                 unsolved_columns &= unsolved_columns - 1; // clear the lowest set bit
+
                 if self.raster[row][col] != 0 {
                     continue;
                 }
 
-                let determined = {
-                    let (raster, possibles) = (&self.raster, &mut self.possibles_raster);
-                    let p = &mut possibles[row][col];
+                // Cross all options
+                self.possibles_raster[row][col].options &= self.rows_options[row]
+                    & self.columns_options[col]
+                    & self.inner_box_options[box_index!(row, col)];
 
-                    // TODO: improve with bit operations
-                    // Iter rows
-                    for &v in &raster[row] {
-                        p.exclude_option(v);
-                    }
-                    // Iter columns
-                    if p.options.count_ones() > 1 {
-                        (0..9).for_each(|r| {
-                            p.exclude_option(raster[r][col]);
-                        });
-                    }
-                    // Iter inner boxes
-                    if p.options.count_ones() > 1 {
-                        let (rs, cs) = ((row / 3) * 3, (col / 3) * 3);
-                        for dr in 0..3 {
-                            for dc in 0..3 {
-                                p.exclude_option(raster[rs + dr][cs + dc]);
-                            }
-                        }
-                    }
-                    p.get_solution()
-                };
-
-                if let Some(v) = determined {
+                if let Some(v) = self.possibles_raster[row][col].get_solution() {
                     self.set_value(row, col, v as u8);
                     found += 1;
                 } else {
@@ -344,9 +338,6 @@ mod test {
             options: 0b0001_1000_0000,
         };
         assert_eq!(None, possibles.get_solution());
-        possibles.exclude_option(9);
-        let visualized = format!("{:09b}", possibles.options);
-        assert_eq!(visualized, "010000000");
     }
 
     #[test]
