@@ -64,6 +64,17 @@ impl Possibles {
         }
     }
 
+    fn from(value: u8) -> Self {
+        if value == 0 {
+            return Self {
+                options: ALL_OPTIONS,
+            };
+        }
+        Self {
+            options: 1 << (value - 1),
+        }
+    }
+
     fn get_solution(&self) -> Option<usize> {
         if self.options.count_ones() != 1 {
             return None;
@@ -112,14 +123,17 @@ impl Sudoku {
         let mut raster = [[0u8; 9]; 9];
         let mut row_unknowns: [u8; 9] = [0u8; 9];
         let mut column_unknowns: [u8; 9] = [0u8; 9];
-        let possibles_raster: [[Possibles; 9]; 9] = [[Possibles::default(); 9]; 9];
+        let mut possibles_raster: [[Possibles; 9]; 9] = [[Possibles::default(); 9]; 9];
         for row in 0..9 {
             for col in 0..9 {
                 let val = bytes[row * 9 + col] - b'0';
                 raster[row][col] = val;
+
                 if val == 0 {
                     row_unknowns[row] += 1;
                     column_unknowns[col] += 1;
+                } else {
+                    possibles_raster[row][col] = Possibles::from(val);
                 }
             }
         }
@@ -128,7 +142,6 @@ impl Sudoku {
                 .iter()
                 .enumerate()
                 .fold(0, |mut result, (i, value)| {
-                    println!("{:09b} new value {} {}", result, *value, i);
                     if *value > 0 {
                         result |= 1u16 << i;
                     }
@@ -139,7 +152,6 @@ impl Sudoku {
                 .iter()
                 .enumerate()
                 .fold(0, |mut result, (i, value)| {
-                    println!("{:09b} new value {} {}", result, *value, i);
                     if *value > 0 {
                         result |= 1u16 << i;
                     }
@@ -152,6 +164,22 @@ impl Sudoku {
             row_unknowns,
             column_unknowns,
             possibles_raster,
+        }
+    }
+
+    pub fn set_value(&mut self, row: usize, col: usize, value: u8) {
+        if self.raster[row][col] > 0 {
+            panic!("already assigned {row} {col}");
+        }
+        self.raster[row][col] = value;
+        self.possibles_raster[row][col].options = 1 << (value - 1);
+        self.row_unknowns[row] -= 1;
+        if self.row_unknowns[row] == 0 {
+            self.unsolved_rows &= ALL_OPTIONS ^ 1 << row;
+        }
+        self.column_unknowns[col] -= 1;
+        if self.column_unknowns[col] == 0 {
+            self.unsolved_columns &= ALL_OPTIONS ^ 1 << col;
         }
     }
 
@@ -173,8 +201,14 @@ impl Sudoku {
     pub fn solve_all_simples(&mut self) -> (u8, u8) {
         let mut found = 0;
         let mut missing = 0;
-        for row in 0..9 {
-            for col in 0..9 {
+        let mut unsolved_rows: u16 = self.unsolved_rows;
+        while unsolved_rows != 0 {
+            let row = unsolved_rows.trailing_zeros() as usize;
+            unsolved_rows &= unsolved_rows - 1; // clear the lowest set bit
+            let mut unsolved_columns: u16 = self.unsolved_columns;
+            while unsolved_columns != 0 {
+                let col = unsolved_columns.trailing_zeros() as usize;
+                unsolved_columns &= unsolved_columns - 1; // clear the lowest set bit
                 if self.raster[row][col] != 0 {
                     continue;
                 }
@@ -207,7 +241,7 @@ impl Sudoku {
                 };
 
                 if let Some(v) = determined {
-                    self.raster[row][col] = v as u8;
+                    self.set_value(row, col, v as u8);
                     found += 1;
                 } else {
                     missing += 1;
