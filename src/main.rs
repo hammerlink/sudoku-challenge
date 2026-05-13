@@ -113,6 +113,8 @@ struct Sudoku {
     pub unsolved_rows: u16,
     /// Which columns have unknowns, similar to unsolved_rows
     pub unsolved_columns: u16,
+    /// Which inner boxes have unknowns, similar to unsolved_rows
+    pub unsolved_inner_boxes: u16,
     /// What options are still open for each row
     /// index-0: 0_0001_0010 => first row has 2 and 5 missing
     pub rows_options: [u16; 9],
@@ -166,14 +168,46 @@ impl Sudoku {
                     }
                     result
                 });
+        let unsolved_inner_boxes: u16 =
+            inner_box_options
+                .iter()
+                .enumerate()
+                .fold(0, |mut result, (i, value)| {
+                    if *value > 0 {
+                        result |= 1u16 << i;
+                    }
+                    result
+                });
         Self {
             raster,
             unsolved_rows,
             unsolved_columns,
+            unsolved_inner_boxes,
             rows_options,
             columns_options,
             inner_box_options,
             possibles_raster,
+        }
+    }
+
+    pub fn solve(&mut self) {
+        loop {
+            let (found, missing) = self.solve_all_simples();
+            if missing == 0 {
+                break;
+            }
+            if found > 0 {
+                continue;
+            }
+            let (found, missing) = self.solve_exclusive_options();
+            if missing == 0 {
+                break;
+            }
+            if found > 0 {
+                continue;
+            }
+
+            break;
         }
     }
 
@@ -186,11 +220,15 @@ impl Sudoku {
         self.rows_options[row] &= ALL_OPTIONS ^ 1 << (value - 1);
         self.columns_options[col] &= ALL_OPTIONS ^ 1 << (value - 1);
         self.inner_box_options[box_index!(row, col)] &= ALL_OPTIONS ^ 1 << (value - 1);
+
         if self.rows_options[row] == 0 {
             self.unsolved_rows &= ALL_OPTIONS ^ 1 << row;
         }
         if self.columns_options[col] == 0 {
             self.unsolved_columns &= ALL_OPTIONS ^ 1 << col;
+        }
+        if self.inner_box_options[box_index!(row, col)] == 0 {
+            self.unsolved_inner_boxes &= ALL_OPTIONS ^ 1 << (box_index!(row, col));
         }
     }
 
@@ -245,6 +283,95 @@ impl Sudoku {
         (found, missing)
     }
 
+    pub fn solve_exclusive_options(&mut self) -> (u8, u8) {
+        let mut found = 0;
+        let mut missing = 0;
+
+        // Iterate over rows
+        let mut unsolved_rows: u16 = self.unsolved_rows;
+        while unsolved_rows != 0 {
+            let row = unsolved_rows.trailing_zeros() as usize;
+            unsolved_rows &= unsolved_rows - 1; // clear the lowest set bit
+
+            let mut row_options = self.rows_options[row];
+            while row_options != 0 {
+                let value = row_options.trailing_zeros() as u8 + 1;
+                row_options &= row_options - 1; // clear the lowest set bit
+
+                let mut options: Vec<(usize, usize)> = vec![];
+                for col in 0..9 {
+                    if self.possibles_raster[row][col].options & 1 << (value - 1) != 0 {
+                        options.push((row, col));
+                    }
+                }
+                if options.len() == 1 {
+                    self.set_value(options[0].0, options[0].1, value);
+                    found += 1;
+                }
+            }
+        }
+
+        // Iterate over columns
+        let mut unsolved_columns: u16 = self.unsolved_columns;
+        while unsolved_columns != 0 {
+            let col = unsolved_columns.trailing_zeros() as usize;
+            unsolved_columns &= unsolved_columns - 1; // clear the lowest set bit
+
+            let mut column_options = self.columns_options[col];
+            while column_options != 0 {
+                let value = column_options.trailing_zeros() as u8 + 1;
+                column_options &= column_options - 1; // clear the lowest set bit
+
+                let mut options: Vec<(usize, usize)> = vec![];
+                for row in 0..9 {
+                    if self.possibles_raster[row][col].options & 1 << (value - 1) != 0 {
+                        options.push((row, col));
+                    }
+                }
+                if options.len() == 1 {
+                    self.set_value(options[0].0, options[0].1, value);
+                    found += 1;
+                }
+            }
+        }
+
+        // Iterate over all inner boxes
+        // Check if there are values that are not accessible for others
+        let mut unsolved_inner_boxes: u16 = self.unsolved_inner_boxes;
+        while unsolved_inner_boxes != 0 {
+            let inner_box_index = unsolved_inner_boxes.trailing_zeros() as usize;
+            unsolved_inner_boxes &= unsolved_inner_boxes - 1; // clear the lowest set bit
+
+            // Iterate over all inner box options
+            let mut inner_box_options: u16 = self.inner_box_options[inner_box_index];
+            while inner_box_options != 0 {
+                let value = inner_box_options.trailing_zeros() as u8 + 1;
+                inner_box_options &= inner_box_options - 1; // clear the lowest set bit
+
+                let mut options: Vec<(usize, usize)> = vec![];
+                let row_start = (inner_box_index / 3) * 3;
+                let col_start = (inner_box_index % 3) * 3;
+                for dr in 0..3 {
+                    for dc in 0..3 {
+                        let row = row_start + dr;
+                        let col = col_start + dc;
+                        if self.possibles_raster[row][col].options & 1 << (value - 1) != 0 {
+                            options.push((row, col));
+                        }
+                    }
+                }
+                if options.len() == 1 {
+                    self.set_value(options[0].0, options[0].1, value);
+                    found += 1;
+                } else {
+                    // Only fill up missing in last iteration
+                    missing += 1;
+                }
+            }
+        }
+        (found, missing)
+    }
+
     pub fn verify(&self, solution: &Solution) -> SolveState {
         for row in 0..9 {
             for column in 0..9 {
@@ -290,24 +417,18 @@ fn process_line(line: &str) -> Option<SolveState> {
     let mut puzzle = Sudoku::from(puzzle);
     let solution = Solution::from(solution);
 
-    loop {
-        let (found, missing) = puzzle.solve_all_simples();
-        if found == 0 {
-            if missing == 0 {
-                break;
-            } else {
-                // TODO:cast inner box line rays
-                // TODO: if 4 variables, where 2 only contain 2 options => eliminate others
-                break;
-            }
-        }
-    }
-    Some(puzzle.verify(&solution))
+    puzzle.solve();
+
+    let result = puzzle.verify(&solution);
+    // if result == SolveState::Incomplete {
+    //     println!("{line}");
+    // }
+    Some(result)
 }
 
 #[cfg(test)]
 mod test {
-    use crate::{ALL_OPTIONS, Possibles, SolveState, Sudoku, process_line};
+    use crate::{ALL_OPTIONS, Possibles, Solution, SolveState, Sudoku, process_line};
 
     #[test]
     fn test_one_puzzle() {
@@ -355,5 +476,21 @@ mod test {
     fn test_trailing_zeros() {
         let value: u16 = 0b0000_0100;
         println!("{} = {}", value, value.trailing_zeros());
+    }
+
+    #[test]
+    fn incomplete_result() {
+        let puzzle = "490703000100500730300900084070000103036000005541600900004009000050208410610000002\
+            ,495783621182546739367921584279854163836197245541632978724319856953268417618475392";
+        let (puzzle, solution) = puzzle.split_once(',').expect("parsed");
+        let mut puzzle = Sudoku::from(puzzle);
+        println!("{}", puzzle);
+        let solution = Solution::from(solution);
+
+        puzzle.solve();
+        println!("{}", puzzle);
+
+        let result = puzzle.verify(&solution);
+        assert_eq!(result, SolveState::Correct);
     }
 }
