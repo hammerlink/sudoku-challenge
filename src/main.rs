@@ -138,6 +138,17 @@ macro_rules! execute_algorithm {
     };
 }
 
+macro_rules! for_each_bit {
+    ($bits:expr, $var:ident, $body:block) => {
+        let mut _bits = $bits;
+        while _bits != 0 {
+            let $var = _bits.trailing_zeros() as usize;
+            _bits &= _bits - 1;
+            $body
+        }
+    };
+}
+
 #[allow(unused)]
 impl Sudoku {
     pub fn solve(&mut self) {
@@ -252,18 +263,8 @@ impl Sudoku {
     pub fn solve_all_simples(&mut self) -> bool {
         let mut found = false;
 
-        // Performant for loop, only iterate over the 1 values in the u16
-        let mut unsolved_rows: u16 = self.unsolved_rows;
-        while unsolved_rows != 0 {
-            let row = unsolved_rows.trailing_zeros() as usize;
-            unsolved_rows &= unsolved_rows - 1; // clear the lowest set bit
-
-            // Performant for loop, only iterate over the 1 values in the u16
-            let mut unsolved_columns: u16 = self.unsolved_columns;
-            while unsolved_columns != 0 {
-                let col = unsolved_columns.trailing_zeros() as usize;
-                unsolved_columns &= unsolved_columns - 1; // clear the lowest set bit
-
+        for_each_bit!(self.unsolved_rows, row, {
+            for_each_bit!(self.unsolved_columns, col, {
                 if self.raster[row][col] != 0 {
                     continue;
                 }
@@ -277,18 +278,15 @@ impl Sudoku {
                     self.set_value(row, col, v as u8);
                     found = true;
                 }
-            }
-        }
+            });
+        });
+
         found
     }
 
     pub fn solve_exclusive_options(&mut self) -> bool {
         // Iterate over rows
-        let mut unsolved_rows: u16 = self.unsolved_rows;
-        while unsolved_rows != 0 {
-            let row = unsolved_rows.trailing_zeros() as usize;
-            unsolved_rows &= unsolved_rows - 1; // clear the lowest set bit
-
+        for_each_bit!(self.unsolved_rows, row, {
             let mut row_options = self.rows_options[row];
             while row_options != 0 {
                 let value = row_options.trailing_zeros() as u8 + 1;
@@ -305,14 +303,10 @@ impl Sudoku {
                     return true;
                 }
             }
-        }
+        });
 
         // Iterate over columns
-        let mut unsolved_columns: u16 = self.unsolved_columns;
-        while unsolved_columns != 0 {
-            let col = unsolved_columns.trailing_zeros() as usize;
-            unsolved_columns &= unsolved_columns - 1; // clear the lowest set bit
-
+        for_each_bit!(self.unsolved_columns, col, {
             let mut column_options = self.columns_options[col];
             while column_options != 0 {
                 let value = column_options.trailing_zeros() as u8 + 1;
@@ -329,16 +323,10 @@ impl Sudoku {
                     return true;
                 }
             }
-        }
+        });
 
-        // Iterate over all inner boxes
-        // Check if there are values that are not accessible for others
-        let mut unsolved_inner_boxes: u16 = self.unsolved_inner_boxes;
-        while unsolved_inner_boxes != 0 {
-            let inner_box_index = unsolved_inner_boxes.trailing_zeros() as usize;
-            unsolved_inner_boxes &= unsolved_inner_boxes - 1; // clear the lowest set bit
-
-            // Iterate over all inner box options
+        // Iterate over all inner box options
+        for_each_bit!(self.unsolved_inner_boxes, inner_box_index, {
             let mut inner_box_options: u16 = self.inner_box_options[inner_box_index];
             while inner_box_options != 0 {
                 let value = inner_box_options.trailing_zeros() as u8 + 1;
@@ -361,7 +349,7 @@ impl Sudoku {
                     return true;
                 }
             }
-        }
+        });
         false
     }
 
@@ -378,6 +366,35 @@ impl Sudoku {
             }
         }
         SolveState::Correct
+    }
+}
+
+#[allow(unused)]
+struct PossiblesView<'a>(&'a Sudoku);
+
+impl<'a> fmt::Display for PossiblesView<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let sep = "+--------------------------------+--------------------------------+--------------------------------+";
+        for row in 0..9 {
+            if row % 3 == 0 {
+                writeln!(f, "{sep}")?;
+            }
+            for col in 0..9 {
+                if col % 3 == 0 {
+                    write!(f, "| ")?;
+                }
+                write!(f, "{:09b} ", self.0.possibles_raster[row][col].options)?;
+            }
+            writeln!(f, "|")?;
+        }
+        write!(f, "{sep}")
+    }
+}
+
+#[allow(unused)]
+impl Sudoku {
+    pub fn possibles_view(&self) -> PossiblesView<'_> {
+        PossiblesView(self)
     }
 }
 
@@ -405,6 +422,7 @@ impl fmt::Display for Sudoku {
     }
 }
 
+static mut TRIGGERED: bool = false;
 fn process_line(line: &str) -> Option<SolveState> {
     let (puzzle, solution) = line.split_once(',')?;
     let mut puzzle = Sudoku::from(puzzle);
@@ -413,8 +431,11 @@ fn process_line(line: &str) -> Option<SolveState> {
     puzzle.solve();
 
     let result = puzzle.verify(&solution);
-    // if result == SolveState::Incomplete {
+    // if unsafe { !TRIGGERED } && result == SolveState::Incomplete {
     //     println!("{line}");
+    //     unsafe {
+    //         TRIGGERED = true;
+    //     }
     // }
     Some(result)
 }
@@ -473,6 +494,7 @@ mod test {
 
     #[test]
     fn incomplete_result() {
+        // Failing test before solve_exclusive_options
         let puzzle = "490703000100500730300900084070000103036000005541600900004009000050208410610000002\
             ,495783621182546739367921584279854163836197245541632978724319856953268417618475392";
         let (puzzle, solution) = puzzle.split_once(',').expect("parsed");
@@ -485,5 +507,23 @@ mod test {
 
         let result = puzzle.verify(&solution);
         assert_eq!(result, SolveState::Correct);
+    }
+
+    #[test]
+    fn incomplete_result_2() {
+        let puzzle = "032000071504000008081040056300870020000004100000350600000008010000915860000000390,\
+            632589471574126938981743256346871529257694183198352647469238715723915864815467392";
+        let (puzzle, solution) = puzzle.split_once(',').expect("parsed");
+        let mut puzzle = Sudoku::from(puzzle);
+        println!("{}", puzzle);
+        let solution = Solution::from(solution);
+
+        puzzle.solve();
+        println!("{}", puzzle.possibles_view());
+        println!("{}", puzzle);
+
+        let result = puzzle.verify(&solution);
+        assert_eq!(result, SolveState::Correct);
+        // TODO: search for occasions where N options occur in N places
     }
 }
