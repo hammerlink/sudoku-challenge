@@ -1,11 +1,11 @@
 use std::fmt;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io;
 use std::slice::Iter;
 
+use memmap2::Mmap;
 use rayon::prelude::*;
 
-const BUFFER_SIZE: usize = 1024 * 1024; // 1 MB read buffer
 const ALL_OPTIONS: u16 = 511;
 
 macro_rules! box_index {
@@ -16,16 +16,16 @@ macro_rules! box_index {
 
 fn main() -> io::Result<()> {
     let file = File::open("sudoku.csv")?;
-    let reader = BufReader::with_capacity(BUFFER_SIZE, file);
+    let mmap = unsafe { Mmap::map(&file)? };
+    let content = std::str::from_utf8(&mmap).expect("valid UTF-8");
 
-    let lines: Vec<String> = reader
+    let lines: Vec<&str> = content
         .lines()
-        .map(|l| l.expect("read error"))
         .skip_while(|l| l.starts_with("puzzle"))
         .collect();
 
     let (complete, incomplete, incorrect) = lines
-        .par_iter()
+        .into_par_iter()
         .fold(
             || (0u64, 0u64, 0u64),
             |mut acc, line| {
