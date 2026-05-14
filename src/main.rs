@@ -125,8 +125,30 @@ struct Sudoku {
     pub possibles_raster: [[Possibles; 9]; 9],
 }
 
+macro_rules! execute_algorithm {
+    ($self:expr, $found:expr) => {
+        // The sudoku is solved, terminate the solve algorithm
+        if $self.unsolved_rows == 0 {
+            break;
+        }
+        // Algorithms are sorted by execution cost, try a simpler algorithm first
+        if $found {
+            continue;
+        }
+    };
+}
+
 #[allow(unused)]
 impl Sudoku {
+    pub fn solve(&mut self) {
+        loop {
+            execute_algorithm!(self, self.solve_all_simples());
+            execute_algorithm!(self, self.solve_exclusive_options());
+
+            // Failed to solve anything, stop solving
+            break;
+        }
+    }
     pub fn from(input: &str) -> Self {
         let bytes = input.as_bytes();
         let mut raster = [[0u8; 9]; 9];
@@ -190,27 +212,6 @@ impl Sudoku {
         }
     }
 
-    pub fn solve(&mut self) {
-        loop {
-            let (found, missing) = self.solve_all_simples();
-            if missing == 0 {
-                break;
-            }
-            if found > 0 {
-                continue;
-            }
-            let (found, missing) = self.solve_exclusive_options();
-            if missing == 0 {
-                break;
-            }
-            if found > 0 {
-                continue;
-            }
-
-            break;
-        }
-    }
-
     pub fn set_value(&mut self, row: usize, col: usize, value: u8) {
         if self.raster[row][col] > 0 {
             panic!("already assigned {row} {col}");
@@ -247,9 +248,9 @@ impl Sudoku {
             .flat_map(move |dr| (0..3).map(move |dc| &self.raster[row_start + dr][col_start + dc]))
     }
 
-    pub fn solve_all_simples(&mut self) -> (u8, u8) {
-        let mut found = 0;
-        let mut missing = 0;
+    /// Returns true if any values have been solved
+    pub fn solve_all_simples(&mut self) -> bool {
+        let mut found = false;
 
         // Performant for loop, only iterate over the 1 values in the u16
         let mut unsolved_rows: u16 = self.unsolved_rows;
@@ -274,19 +275,14 @@ impl Sudoku {
 
                 if let Some(v) = self.possibles_raster[row][col].get_solution() {
                     self.set_value(row, col, v as u8);
-                    found += 1;
-                } else {
-                    missing += 1;
+                    found = true;
                 }
             }
         }
-        (found, missing)
+        found
     }
 
-    pub fn solve_exclusive_options(&mut self) -> (u8, u8) {
-        let mut found = 0;
-        let mut missing = 0;
-
+    pub fn solve_exclusive_options(&mut self) -> bool {
         // Iterate over rows
         let mut unsolved_rows: u16 = self.unsolved_rows;
         while unsolved_rows != 0 {
@@ -306,7 +302,7 @@ impl Sudoku {
                 }
                 if options.len() == 1 {
                     self.set_value(options[0].0, options[0].1, value);
-                    found += 1;
+                    return true;
                 }
             }
         }
@@ -330,7 +326,7 @@ impl Sudoku {
                 }
                 if options.len() == 1 {
                     self.set_value(options[0].0, options[0].1, value);
-                    found += 1;
+                    return true;
                 }
             }
         }
@@ -362,14 +358,11 @@ impl Sudoku {
                 }
                 if options.len() == 1 {
                     self.set_value(options[0].0, options[0].1, value);
-                    found += 1;
-                } else {
-                    // Only fill up missing in last iteration
-                    missing += 1;
+                    return true;
                 }
             }
         }
-        (found, missing)
+        false
     }
 
     pub fn verify(&self, solution: &Solution) -> SolveState {
