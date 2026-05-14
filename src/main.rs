@@ -138,11 +138,27 @@ macro_rules! execute_algorithm {
     };
 }
 
+/// Iterates over each 1 value in a u16 (or other value that supports trailing_zeros)
+/// Produces the index of the 1 each time
+/// Example u16 b0001_1000_0000 => iterates \[8,9\]
 macro_rules! for_each_bit {
     ($bits:expr, $var:ident, $body:block) => {
         let mut _bits = $bits;
         while _bits != 0 {
             let $var = _bits.trailing_zeros() as usize;
+            _bits &= _bits - 1;
+            $body
+        }
+    };
+}
+
+/// Identical to for_each_bit but convert it to a sudoku value in u8
+/// 1_0001_0010, iterates over \[2,5,9\]
+macro_rules! for_each_bit_value {
+    ($bits:expr, $var:ident, $body:block) => {
+        let mut _bits = $bits;
+        while _bits != 0 {
+            let $var = _bits.trailing_zeros() as u8 + 1;
             _bits &= _bits - 1;
             $body
         }
@@ -287,11 +303,7 @@ impl Sudoku {
     pub fn solve_exclusive_options(&mut self) -> bool {
         // Iterate over rows
         for_each_bit!(self.unsolved_rows, row, {
-            let mut row_options = self.rows_options[row];
-            while row_options != 0 {
-                let value = row_options.trailing_zeros() as u8 + 1;
-                row_options &= row_options - 1; // clear the lowest set bit
-
+            for_each_bit_value!(self.rows_options[row], value, {
                 let mut options: Vec<(usize, usize)> = vec![];
                 for col in 0..9 {
                     if self.possibles_raster[row][col].options & 1 << (value - 1) != 0 {
@@ -302,16 +314,12 @@ impl Sudoku {
                     self.set_value(options[0].0, options[0].1, value);
                     return true;
                 }
-            }
+            });
         });
 
         // Iterate over columns
         for_each_bit!(self.unsolved_columns, col, {
-            let mut column_options = self.columns_options[col];
-            while column_options != 0 {
-                let value = column_options.trailing_zeros() as u8 + 1;
-                column_options &= column_options - 1; // clear the lowest set bit
-
+            for_each_bit_value!(self.columns_options[col], value, {
                 let mut options: Vec<(usize, usize)> = vec![];
                 for row in 0..9 {
                     if self.possibles_raster[row][col].options & 1 << (value - 1) != 0 {
@@ -322,16 +330,12 @@ impl Sudoku {
                     self.set_value(options[0].0, options[0].1, value);
                     return true;
                 }
-            }
+            });
         });
 
         // Iterate over all inner box options
         for_each_bit!(self.unsolved_inner_boxes, inner_box_index, {
-            let mut inner_box_options: u16 = self.inner_box_options[inner_box_index];
-            while inner_box_options != 0 {
-                let value = inner_box_options.trailing_zeros() as u8 + 1;
-                inner_box_options &= inner_box_options - 1; // clear the lowest set bit
-
+            for_each_bit_value!(self.inner_box_options[inner_box_index], value, {
                 let mut options: Vec<(usize, usize)> = vec![];
                 let row_start = (inner_box_index / 3) * 3;
                 let col_start = (inner_box_index % 3) * 3;
@@ -348,7 +352,7 @@ impl Sudoku {
                     self.set_value(options[0].0, options[0].1, value);
                     return true;
                 }
-            }
+            });
         });
         false
     }
@@ -525,5 +529,8 @@ mod test {
         let result = puzzle.verify(&solution);
         assert_eq!(result, SolveState::Correct);
         // TODO: search for occasions where N options occur in N places
+        for_each_bit!(puzzle.unsolved_rows, row, {
+            //
+        });
     }
 }
