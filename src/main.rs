@@ -154,6 +154,7 @@ impl Solution {
     }
 }
 
+#[derive(Clone)]
 struct Sudoku {
     pub raster: [[u8; 9]; 9],
     /// Which row indeces are not completely filled yet
@@ -221,7 +222,9 @@ impl Sudoku {
             execute_algorithm!(self, self.solve_exclusive_options());
             execute_algorithm!(self, self.exclude_by_ray_casting());
 
-            // Failed to solve anything, stop solving
+            execute_algorithm!(self, self.exclude_by_testing());
+
+            // No results, stop
             break;
         }
     }
@@ -476,6 +479,29 @@ impl Sudoku {
         options_excluded
     }
 
+    pub fn exclude_by_testing(&mut self) -> bool {
+        // Test out first encounter
+        let row = self.unsolved_rows.trailing_zeros() as usize;
+        for_each_bit!(self.unsolved_columns, col, {
+            let options = options!(self, row, col);
+            if options.count_ones() <= 1 {
+                continue;
+            }
+            let value = options.trailing_zeros() as u8 + 1;
+            let mut copy = self.clone();
+
+            copy.set_value(row, col, value);
+            copy.solve();
+            if copy.unsolved_rows == 0 {
+                self.set_value(row, col, value);
+            } else {
+                self.possibles_raster[row][col].options &= ALL_OPTIONS ^ 1 << (value - 1);
+            }
+            return true;
+        });
+        false
+    }
+
     pub fn verify(&self, solution: &Solution) -> SolveState {
         for row in 0..9 {
             for column in 0..9 {
@@ -506,7 +532,12 @@ impl<'a> fmt::Display for PossiblesView<'a> {
                 if col % 3 == 0 {
                     write!(f, "| ")?;
                 }
-                write!(f, "{:09b} ", self.0.possibles_raster[row][col].options)?;
+                let options = self.0.possibles_raster[row][col].options;
+                if options.count_ones() == 1 {
+                    write!(f, "--------- ")?;
+                } else {
+                    write!(f, "{:09b} ", options)?;
+                }
             }
             writeln!(f, "|")?;
         }
@@ -642,15 +673,11 @@ mod test {
         let solution = Solution::from(solution);
 
         puzzle.solve();
-        println!("{}", puzzle.possibles_view());
+        // println!("{}", puzzle.possibles_view());
         println!("{}", puzzle);
 
         let result = puzzle.verify(&solution);
 
-        // puzzle.exclude_by_ray_casting();
-        // println!("{}", puzzle.possibles_view());
-        // puzzle.solve();
-        // println!("{}", puzzle);
         assert_eq!(result, SolveState::Correct);
     }
 }
