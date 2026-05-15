@@ -49,18 +49,18 @@ If not, eliminate that candidate and continue. This brought the completion rate 
 
 The commit history tells the story of how the solution evolved:
 
-| Step | What changed | Result |
-|------|-------------|--------|
-| Initial attempt | Basic constraint propagation | 80% solved, ~61 sec |
-| Rayon | Parallel iteration over all 9M puzzles | Big speedup |
-| Byte operations | Switch from char parsing to byte ops | ~5.9 sec |
-| Bitmask crossing | Represent candidates as `u16` bitmasks | ~2.4 sec, 2× faster |
-| Track unsolved sets | Bitmask of unsolved rows/cols/boxes, skip solved | Fewer iterations |
-| Exclusive options | Detect forced values across row/col/box | 97.72% solved |
-| Macros (`for_each_bit`, `for_each_bit_value`) | Iterate set bits without boilerplate | Cleaner code |
-| `memmap2` | Memory-mapped file reading | Faster I/O |
-| Ray casting | Eliminate candidates across box boundaries | ~98% solved |
-| Testing a value | Try & verify a candidate on a clone | 100% solved, ~2.95 sec |
+| Step                                          | What changed                                     | Result                 |
+| --------------------------------------------- | ------------------------------------------------ | ---------------------- |
+| Initial attempt                               | Basic constraint propagation                     | 80% solved, ~61 sec    |
+| Rayon                                         | Parallel iteration over all 9M puzzles           | Big speedup            |
+| Byte operations                               | Switch from char parsing to byte ops             | ~5.9 sec               |
+| Bitmask crossing                              | Represent candidates as `u16` bitmasks           | ~2.4 sec, 2× faster    |
+| Track unsolved sets                           | Bitmask of unsolved rows/cols/boxes, skip solved | Fewer iterations       |
+| Exclusive options                             | Detect forced values across row/col/box          | 97.72% solved          |
+| Macros (`for_each_bit`, `for_each_bit_value`) | Iterate set bits without boilerplate             | Cleaner code           |
+| `memmap2`                                     | Memory-mapped file reading                       | Faster I/O             |
+| Ray casting                                   | Eliminate candidates across box boundaries       | ~98% solved            |
+| Testing a value                               | Try & verify a candidate on a clone              | 100% solved, ~2.95 sec |
 
 ## Final Result
 
@@ -84,6 +84,20 @@ keep the algorithm code readable.
 
 **Rayon** — a single `.into_par_iter()` parallelises the 9M puzzle workload across all
 cores with no manual thread management.
+
+## Current state & future work
+
+Only `solve_all_simples` was written with performance in mind. The three algorithms that
+followed were built for correctness — heap allocations, redundant iterations, and general
+cleanup are still on the table.
+
+Known areas to improve:
+
+- Remove heap allocations (e.g. the `Vec` in `solve_exclusive_options`)
+- Performance pass on `solve_exclusive_options`, `exclude_by_ray_casting`, and `exclude_by_testing`
+- General code cleanup
+
+Might be continued.
 
 ## Running
 
