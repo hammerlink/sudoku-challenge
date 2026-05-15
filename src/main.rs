@@ -216,6 +216,7 @@ macro_rules! for_each_bit_value {
 
 #[allow(unused)]
 impl Sudoku {
+    /// Applies algorithms cheapest-first; restarts from the top whenever progress is made.
     pub fn solve(&mut self) {
         loop {
             execute_algorithm!(self, self.solve_all_simples());
@@ -327,7 +328,7 @@ impl Sudoku {
             .flat_map(move |dr| (0..3).map(move |dc| &self.raster[row_start + dr][col_start + dc]))
     }
 
-    /// Returns true if any values have been solved
+    /// Intersects row/col/box candidate sets for each empty cell; fills any cell left with exactly one option.
     pub fn solve_all_simples(&mut self) -> bool {
         let mut found = false;
 
@@ -352,6 +353,7 @@ impl Sudoku {
         found
     }
 
+    /// If a value fits only one cell in its row, column, or box, it is forced there even when that cell has other candidates.
     pub fn solve_exclusive_options(&mut self) -> bool {
         // Iterate over rows
         for_each_bit!(self.unsolved_rows, row, {
@@ -409,6 +411,7 @@ impl Sudoku {
         false
     }
 
+    /// If a candidate is confined to one row/col within a 3×3 box, eliminates it from the rest of that row/col outside the box (pointing pairs/triples).
     pub fn exclude_by_ray_casting(&mut self) -> bool {
         let mut options_excluded = false;
         for_each_bit!(self.unsolved_inner_boxes, inner_box_index, {
@@ -479,6 +482,7 @@ impl Sudoku {
         options_excluded
     }
 
+    /// Tries the lowest candidate in the first unsolved cell on a clone; accepts it if the clone solves fully, otherwise eliminates it.
     pub fn exclude_by_testing(&mut self) -> bool {
         // Test out first encounter
         let row = self.unsolved_rows.trailing_zeros() as usize;
