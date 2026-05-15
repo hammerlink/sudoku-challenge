@@ -14,6 +14,54 @@ macro_rules! box_index {
     };
 }
 
+macro_rules! options {
+    ($puzzle:expr, $row:expr, $col:expr) => {
+        $puzzle.possibles_raster[$row][$col].options
+    };
+}
+
+macro_rules! inner_box_row_options {
+    ($puzzle:expr, $inner_box_row:expr, $inner_box_col:expr, $inner_box_row_index: expr) => {
+        (options!(
+            $puzzle,
+            $inner_box_row + $inner_box_row_index,
+            $inner_box_col
+        ) | options!(
+            $puzzle,
+            $inner_box_row + $inner_box_row_index,
+            $inner_box_col + 1
+        ) | options!(
+            $puzzle,
+            $inner_box_row + $inner_box_row_index,
+            $inner_box_col + 2
+        ))
+    };
+}
+
+macro_rules! inner_box_col_options {
+    ($puzzle:expr, $inner_box_row:expr, $inner_box_col:expr, $inner_box_col_index: expr) => {
+        (options!(
+            $puzzle,
+            $inner_box_row,
+            $inner_box_col + $inner_box_col_index
+        ) | options!(
+            $puzzle,
+            $inner_box_row + 1,
+            $inner_box_col + $inner_box_col_index
+        ) | options!(
+            $puzzle,
+            $inner_box_row + 2,
+            $inner_box_col + $inner_box_col_index
+        ))
+    };
+}
+
+macro_rules! exclusive_options {
+    ($base:expr, $other1:expr, $other2:expr) => {
+        (($base ^ $other1) & $base) & (($base ^ $other2) & $base)
+    };
+}
+
 fn main() -> io::Result<()> {
     let file = File::open("sudoku.csv")?;
     let mmap = unsafe { Mmap::map(&file)? };
@@ -171,6 +219,7 @@ impl Sudoku {
         loop {
             execute_algorithm!(self, self.solve_all_simples());
             execute_algorithm!(self, self.solve_exclusive_options());
+            execute_algorithm!(self, self.exclude_by_ray_casting());
 
             // Failed to solve anything, stop solving
             break;
@@ -357,6 +406,76 @@ impl Sudoku {
         false
     }
 
+    pub fn exclude_by_ray_casting(&mut self) -> bool {
+        let mut options_excluded = false;
+        for_each_bit!(self.unsolved_inner_boxes, inner_box_index, {
+            let row = (inner_box_index / 3) * 3;
+            let col = (inner_box_index % 3) * 3;
+
+            let inner_box_rows: [u16; 3] = [
+                inner_box_row_options!(self, row, col, 0) & self.inner_box_options[inner_box_index],
+                inner_box_row_options!(self, row, col, 1) & self.inner_box_options[inner_box_index],
+                inner_box_row_options!(self, row, col, 2) & self.inner_box_options[inner_box_index],
+            ];
+            let inner_box_cols: [u16; 3] = [
+                inner_box_col_options!(self, row, col, 0) & self.inner_box_options[inner_box_index],
+                inner_box_col_options!(self, row, col, 1) & self.inner_box_options[inner_box_index],
+                inner_box_col_options!(self, row, col, 2) & self.inner_box_options[inner_box_index],
+            ];
+
+            // Row options
+            // Search for exclusives, all options that are in no other row
+            for i in 0..3 {
+                let exclusive_row = exclusive_options!(
+                    inner_box_rows[i],
+                    inner_box_rows[(i + 1) % 3],
+                    inner_box_rows[(i + 2) % 3]
+                );
+                if exclusive_row == 0 {
+                    continue;
+                }
+                for row_col in 0..9 {
+                    // Skip within inner box
+                    if row_col >= col && row_col <= col + 2 {
+                        continue;
+                    }
+
+                    let options = options!(self, row + i, row_col);
+                    if options & (ALL_OPTIONS ^ exclusive_row) != options {
+                        self.possibles_raster[row + i][row_col].options &=
+                            ALL_OPTIONS ^ exclusive_row;
+                        options_excluded = true;
+                    }
+                }
+            }
+
+            // Search for exclusives, all options that are in no other col
+            for i in 0..3 {
+                let exclusive_col = exclusive_options!(
+                    inner_box_cols[i],
+                    inner_box_cols[(i + 1) % 3],
+                    inner_box_cols[(i + 2) % 3]
+                );
+                if exclusive_col == 0 {
+                    continue;
+                }
+                for col_row in 0..9 {
+                    // Skip within inner box
+                    if col_row >= row && col_row <= row + 2 {
+                        continue;
+                    }
+                    let options = options!(self, col_row, col + i);
+                    if options & (ALL_OPTIONS ^ exclusive_col) != options {
+                        self.possibles_raster[col_row][col + i].options &=
+                            ALL_OPTIONS ^ exclusive_col;
+                        options_excluded = true;
+                    }
+                }
+            }
+        });
+        options_excluded
+    }
+
     pub fn verify(&self, solution: &Solution) -> SolveState {
         for row in 0..9 {
             for column in 0..9 {
@@ -378,7 +497,7 @@ struct PossiblesView<'a>(&'a Sudoku);
 
 impl<'a> fmt::Display for PossiblesView<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let sep = "+--------------------------------+--------------------------------+--------------------------------+";
+        let sep = "+-------------------------------+-------------------------------+-------------------------------+";
         for row in 0..9 {
             if row % 3 == 0 {
                 writeln!(f, "{sep}")?;
@@ -527,10 +646,11 @@ mod test {
         println!("{}", puzzle);
 
         let result = puzzle.verify(&solution);
+
+        // puzzle.exclude_by_ray_casting();
+        // println!("{}", puzzle.possibles_view());
+        // puzzle.solve();
+        // println!("{}", puzzle);
         assert_eq!(result, SolveState::Correct);
-        // TODO: search for occasions where N options occur in N places
-        for_each_bit!(puzzle.unsolved_rows, row, {
-            //
-        });
     }
 }
