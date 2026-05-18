@@ -1,0 +1,3 @@
+[submodule "tdoku"]
+	url = git@github.com:hammerlink/tdoku.git
+	path = tdoku
